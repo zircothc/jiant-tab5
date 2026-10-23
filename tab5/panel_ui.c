@@ -846,6 +846,12 @@ void panel_touch(const panel_pt *pts, int n, uint32_t now_ms)
             }
         } else if (C[slot].kind == T_KNOB) {
             knob_drag(&C[slot], pts[i].y);
+        } else if (C[slot].kind == T_KEY && !s_learn) {   /* a glissando: sliding onto another key plays that key */
+            int kind, idx;
+            C[slot].x = pts[i].x;
+            C[slot].y = pts[i].y;
+            if (hit(pts[i].x, pts[i].y, &kind, &idx) && kind == T_KEY)
+                C[slot].idx = (uint8_t)idx;            /* (off the keys, or on a button: the finger keeps its key) */
         }
         seen[slot] = 1;
     }

@@ -121,6 +121,16 @@ int main(int argc, char **argv)
     down(0, 3, BTN(TAB5_B_HOME)); tick(100); lift_all(); tick(300);
     CHECK(panel_latched_buttons() == 0, "and SEQ did NOT lock, because another control was used while holding it");
 
+    printf("slide one finger across keys\n");
+    down(0, 20, KEYC(4)); tick(200);
+    CHECK(tab5_held_keys() == (1u << 7), "finger on key 7: only key 7 held (0x%x)", tab5_held_keys());
+    down(0, 20, KEYC(5)); tick(100);
+    CHECK(tab5_held_keys() == (1u << 9), "sliding to the next white key: now key 9, key 7 released (0x%x)", tab5_held_keys());
+    down(0, 20, 640, 360); tick(100);
+    CHECK(tab5_held_keys() == (1u << 9), "sliding off the keys: the finger keeps key 9 (0x%x)", tab5_held_keys());
+    lift_all(); tick(300);
+    CHECK(tab5_held_keys() == 0, "lifted: nothing held");
+
     printf("knobs\n");
     h0 = screen_hash();
     down(0, 6, 600, 300); tick(20);
