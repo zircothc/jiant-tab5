@@ -1,0 +1,7 @@
+## The Tab5 board support package without a graphics library (we draw the panel ourselves).
+## It powers the LCD, touch and speaker by itself and detects the three hardware revisions
+## (ILI9881C + GT911, ST7123, ST7121), so none of that is repeated here.
+dependencies:
+  idf: ">=5.4"
+  espressif/m5stack_tab5_noglib: ">=1.2"
+  espressif/esp_lcd_touch: "*"

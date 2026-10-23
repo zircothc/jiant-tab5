@@ -1,0 +1,19 @@
+CONFIG_IDF_TARGET="esp32p4"
+# the Tab5 uses ESP32-P4 silicon older than v3 (same as the official BSP examples)
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n
+# the firmware's always_inline JieLi register helpers are only safe to drop with optimisation on
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# the firmware's big static buffers (delay line, punch ring, screen, UI canvas, audio ring) live in PSRAM; see components/jiant
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+# code is read from flash through the cache: 80 MHz instead of the 40 MHz default
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
