@@ -2,6 +2,8 @@
 
 Port of [JIANT FM](https://github.com/juanjiant-bit/JIANT) (a Felucca fork for the M-Vave FM-1, v0.9.18) to the M5Stack Tab5 (ESP32-P4), with a full touch panel, USB MIDI host and MIDI learn.
 
+![Panel de JIANT en el Tab5](docs/panel.png)
+
 GPL-3.0-only, like JIANT.
 
 ## Build
