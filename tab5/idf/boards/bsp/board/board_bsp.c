@@ -16,6 +16,7 @@
 #include "bsp/touch.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #include "esp_lcd_panel_ops.h"
@@ -62,6 +63,17 @@ esp_err_t board_init(void)
     do { esp_err_t e_ = bsp_display_new_with_handles(&dcfg, &h); if (e_ != ESP_OK) return e_; } while (0);
     s_panel = h.panel;
     do { esp_err_t e_ = esp_lcd_panel_disp_on_off(s_panel, true); if (e_ != ESP_OK) return e_; } while (0);
+    bsp_display_brightness_set(0);                   /* dark until the screen is cleared: the panel's memory holds whatever was there (a "burnt" halo at boot) */
+    {
+        const int rows = 72;                         /* 1280 x 72 black stripes, in portrait: 720 x ... drawn straight to the panel */
+        uint16_t *z = heap_caps_calloc((size_t)PW * rows, 2, MALLOC_CAP_SPIRAM);
+        if (z) {
+            for (int y0 = 0; y0 < PH; y0 += rows)
+                esp_lcd_panel_draw_bitmap(s_panel, 0, y0, PW, y0 + (y0 + rows <= PH ? rows : PH - y0), z);
+            vTaskDelay(pdMS_TO_TICKS(60));           /* let the DSI refresh show it */
+            heap_caps_free(z);
+        }
+    }
     bsp_display_brightness_set(100);
 
     {

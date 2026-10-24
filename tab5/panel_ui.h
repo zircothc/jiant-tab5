@@ -35,3 +35,5 @@ void panel_set_tone_cb(void (*cb)(void));
 /* the output level (software gain, 0..8) and what is plugged in: shown on the learn page, with LEVEL - / + buttons */
 void panel_set_level_cb(void (*cb)(int delta));
 void panel_set_audio_info(int level, int headphones);
+
+void panel_set_title(const char *t);                  /* the firmware's name and version, drawn above the function buttons */

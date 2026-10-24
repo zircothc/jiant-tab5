@@ -60,7 +60,7 @@ static void boot_beep(void)
 
 static uint32_t hook_ticks(void) { return (uint32_t)(esp_timer_get_time() * 24); }   /* the firmware's 24 MHz TIMER4 */
 
-static volatile int s_level = 4;                     /* output level 0..12: software gain, 3 dB per step (12 = +36 dB, the limiter does the rest) (see audio_task) */
+static volatile int s_level = 8;                     /* output level 0..12: software gain, 3 dB per step (8 = -6 dB, 12 = +6 dB, 12 dB less on headphones; the limiter does the rest) (see audio_task) */
 static volatile int s_hp;                            /* headphones plugged into the 3.5 mm jack */
 static volatile int s_level_dirty;
 static volatile int s_tone_req;                      /* the learn page's TONE button */
@@ -88,21 +88,97 @@ static void tone_cb(void)                            /* input task */
     s_tone_req = 1;
 }
 
+
+/* The firmware (render task) works AHEAD of the I2S writer (audio task) through a few blocks of buffer: a screen frame or a heavy
+ * preset that takes longer than one 5.8 ms block no longer leaves the codec without data (that was the noise). */
+#define QB 10                                       /* blocks in the queue */
+#define QLEAD 6                                      /* the renderer keeps this many ready: 35 ms of latency, enough for the longest screen frame */
+static int32_t s_q[QB][BLOCK * 2];
+static volatile uint32_t s_qh, s_qt;                 /* head (renderer), tail (audio task) */
+static volatile uint32_t s_underruns;
+static volatile int32_t s_rend_worst_us, s_rend_sum_us, s_rend_blocks;
+
+/* The second core. JIANT's mixer renders some tracks on a second core (the FM-1's AC79 has one): here that is this helper
+ * thread, on core 0 above the screen and the input, woken for each block's job and waited for by the audio render. */
+static TaskHandle_t s_helper;
+static void (*volatile s_h_fn)(uint32_t);
+static volatile uint32_t s_h_arg, s_h_job, s_h_done;
+
+static int mc_run_hook(void (*fn)(uint32_t), uint32_t arg)
+{
+    s_h_fn = fn;
+    s_h_arg = arg;
+    __atomic_store_n(&s_h_job, s_h_job + 1u, __ATOMIC_RELEASE);
+    xTaskNotifyGive(s_helper);
+    return 1;
+}
+
+static int mc_wait_hook(void)
+{
+    int64_t t0 = esp_timer_get_time();
+    while (__atomic_load_n(&s_h_done, __ATOMIC_ACQUIRE) != s_h_job)
+        if (esp_timer_get_time() - t0 > 50000)       /* 50 ms: it is not coming back */
+            return -1;
+    return 0;
+}
+
+static uint32_t cnum_hook(void) { return xTaskGetCurrentTaskHandle() == s_helper ? 1u : 0u; }
+
+static void helper_task(void *arg)
+{
+    uint32_t done = 0;
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        while (done != __atomic_load_n(&s_h_job, __ATOMIC_ACQUIRE)) {
+            s_h_fn(s_h_arg);
+            done++;
+            __atomic_store_n(&s_h_done, done, __ATOMIC_RELEASE);
+        }
+    }
+}
+
+static void render_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        uint32_t h = s_qh;
+        if (h - __atomic_load_n(&s_qt, __ATOMIC_ACQUIRE) >= QLEAD) {
+            vTaskDelay(1);
+            continue;
+        }
+        int64_t t0 = esp_timer_get_time();
+        tab5_audio_read(s_q[h % QB], BLOCK);         /* runs the device until BLOCK frames exist */
+        int32_t dt = (int32_t)(esp_timer_get_time() - t0);
+        if (dt > s_rend_worst_us)
+            s_rend_worst_us = dt;
+        s_rend_sum_us += dt;
+        s_rend_blocks++;
+        __atomic_store_n(&s_qh, h + 1u, __ATOMIC_RELEASE);
+    }
+}
+
 static void audio_task(void *arg)
 {
     static int32_t buf[BLOCK * 2];
-    int64_t worst = 0, sum = 0, t_log = esp_timer_get_time();
-    uint32_t blocks = 0;
+    int64_t t_log = esp_timer_get_time();
     int32_t peak = 0;
     int tone_left = 0;
     float tph = 0;
     (void)arg;
     for (;;) {
-        int64_t t0 = esp_timer_get_time(), dt;
-        tab5_audio_read(buf, BLOCK);                 /* runs the device until BLOCK frames exist */
-        dt = esp_timer_get_time() - t0;
+        {
+            uint32_t t = s_qt;
+            if (__atomic_load_n(&s_qh, __ATOMIC_ACQUIRE) == t) {      /* the renderer is late: silence, and count it */
+                memset(buf, 0, sizeof buf);
+                s_underruns++;
+            } else {
+                memcpy(buf, s_q[t % QB], sizeof buf);
+                __atomic_store_n(&s_qt, t + 1u, __ATOMIC_RELEASE);
+            }
+        }
         for (int i = 0; i < BLOCK * 2; i++) {        /* the loudest sample the firmware produced (24 bit) */
-            int32_t v = buf[i] >> 8;
+            int32_t v = buf[i];                          /* the firmware's samples: 24 bit, right-justified (NOT left-justified) */
             if (v < 0)
                 v = -v;
             if (v > peak)
@@ -114,31 +190,36 @@ static void audio_task(void *arg)
         }
         if (tone_left > 0) {                         /* about the level of one note, so it goes through the gain like music */
             for (int i = 0; i < BLOCK; i++, tph += 6.2831853f * 440.0f / 44100.0f)
-                buf[2 * i] = buf[2 * i + 1] = (int32_t)(sinf(tph) * 0.09f * 8388607.0f) << 8;
+                buf[2 * i] = buf[2 * i + 1] = (int32_t)(sinf(tph) * 0.09f * 8388607.0f);
             tone_left -= BLOCK;
         }
         {   /* the Tab5's speaker is small: the firmware's own level (made for a line output) gets a gain, a soft limiter keeps it clean */
-            float g = powf(10.0f, (float)(s_level * 3 - (s_hp ? 12 : 0)) / 20.0f);
+            float g = powf(10.0f, (float)(s_level * 3 - 30 - (s_hp ? 12 : 0)) / 20.0f);
             for (int i = 0; i < BLOCK * 2; i++) {
-                float y = softclip((float)(buf[i] >> 8) * (1.0f / 8388608.0f) * g);
+                float y = softclip((float)buf[i] * (1.0f / 8388608.0f) * g);
                 buf[i] = (int32_t)(y * 8388607.0f) << 8;
             }
         }
         board_audio_write(buf, BLOCK);               /* blocks: this is what keeps time */
-        sum += dt;
-        blocks++;
-        if (dt > worst)
-            worst = dt;
         if (esp_timer_get_time() - t_log > 5000000) {
-            ESP_LOGI(TAG, "audio: compute avg %lld us, worst %lld us of %lld us per block; firmware cpu %u/256; firmware peak %d%% of full scale, gain %+d dB (%s); stack free %u B",
-                     (long long)(sum / blocks), (long long)worst, (long long)BLOCK * 1000000 / 44100,
-                     (unsigned)tab5_cpu_q8(), (int)((int64_t)peak * 100 / 8388607), s_level * 3 - (s_hp ? 12 : 0), s_hp ? "headphones" : "speaker",
+            int32_t rb = s_rend_blocks ? s_rend_blocks : 1;
+            ESP_LOGI(TAG, "audio: render avg %d us, worst %d us of %lld us per block; UNDERRUNS %u; CORES %d; firmware cpu %u/256; firmware peak %d%% of full scale, gain %+d dB (%s); stack free %u B",
+                     (int)(s_rend_sum_us / rb), (int)s_rend_worst_us, (long long)BLOCK * 1000000 / 44100, (unsigned)s_underruns, tab5_cores(),
+                     (unsigned)tab5_cpu_q8(), (int)((int64_t)peak * 100 / 8388607), s_level * 3 - 30 - (s_hp ? 12 : 0), s_hp ? "headphones" : "speaker",
                      (unsigned)uxTaskGetStackHighWaterMark(NULL));
-            worst = sum = 0;
+            s_rend_worst_us = s_rend_sum_us = s_rend_blocks = 0;
             peak = 0;
-            blocks = 0;
             t_log = esp_timer_get_time();
         }
+    }
+}
+
+static void ui_task(void *arg)                       /* the FM-1's main loop: ui_input, the screen's frames, the sequencer's housekeeping */
+{
+    (void)arg;
+    for (;;) {
+        tab5_step_ui();
+        vTaskDelay(1);
     }
 }
 
@@ -261,6 +342,10 @@ void app_main(void)
         ESP_LOGW(TAG, "no 'jiantnor' partition: nothing will be saved");
     tab5_set_nor(nor_mem);
 
+    xTaskCreatePinnedToCore(helper_task, "helper", 24576, NULL, configMAX_PRIORITIES - 3, &s_helper, 0);
+    tab5_mc_run_hook = mc_run_hook;                  /* the second core: see helper_task */
+    tab5_mc_wait_hook = mc_wait_hook;
+    tab5_cnum_hook = cnum_hook;
     tab5_ticks_hook = hook_ticks;                    /* a real clock: the firmware's CPU meter and load shedding work */
     board_audio_enable();
     boot_beep();
@@ -272,6 +357,7 @@ void app_main(void)
             return;
         }
         panel_init(scratch, 480 * 480, board_display_blit);
+        panel_set_title(tab5_title());
         {
             nvs_handle_t h;
             uint8_t blob[256];
@@ -303,5 +389,8 @@ void app_main(void)
     xTaskCreatePinnedToCore(display_task, "display", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(input_task, "input", 4096, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(persist_task, "persist", 4096, NULL, 2, NULL, 0);
-    xTaskCreatePinnedToCore(audio_task, "audio", 24576, NULL, configMAX_PRIORITIES - 2, NULL, 1);
+    tab5_split = 1;                                  /* audio render on core 1, the main loop on core 0 */
+    xTaskCreatePinnedToCore(ui_task, "ui", 16384, NULL, 3, NULL, 0);
+    xTaskCreatePinnedToCore(render_task, "render", 24576, NULL, configMAX_PRIORITIES - 4, NULL, 1);
+    xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, configMAX_PRIORITIES - 2, NULL, 1);
 }

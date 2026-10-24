@@ -46,7 +46,7 @@ static void save(const char *dir, const char *name)
 }
 static void on_save(const uint8_t *blob, size_t len) { (void)blob; (void)len; saves++; }
 
-#define BTNC(b) (b < 12 ? 520 + (b % 6) * 124 + 58 : 984 + (b - 12) * 96 + 44), (b < 12 ? 24 + (b / 6) * 96 + 44 : 386 + 44)
+#define BTNC(b) (b < 12 ? 812 + (b % 6) * 76 + 34 : 534 + (b - 12) * 76 + 34), (b < 12 ? 224 + (b / 6) * 121 + 53 : 345 + 53)
 #define KEYC(i) ((int)(28 + ((i) + 0.5f) * 76.5f)), 660
 #define MIDI_BTN BTNC(14)
 #define SOFT_MODE 126, 394
@@ -55,7 +55,7 @@ static void on_save(const uint8_t *blob, size_t len) { (void)blob; (void)len; sa
 #define SOFT_EXIT 370, 458
 #define SOFT_LVL_DN 66, 328
 #define SOFT_LVL_UP 190, 328
-#define KNOB_K1 600, 292
+#define KNOB_K1 864, 70
 
 int main(int argc, char **argv)
 {

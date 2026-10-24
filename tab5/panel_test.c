@@ -64,7 +64,7 @@ static void save(const char *path)
     fclose(f);
 }
 /* centres of things (landscape) */
-#define BTN(b) (b < 12 ? 520 + (b % 6) * 124 + 58 : 984 + (b - 12) * 96 + 44), (b < 12 ? 24 + (b / 6) * 96 + 44 : 386 + 44)
+#define BTN(b) (b < 12 ? 812 + (b % 6) * 76 + 34 : 534 + (b - 12) * 76 + 34), (b < 12 ? 224 + (b / 6) * 121 + 53 : 345 + 53)
 #define KEYC(i) ((int)(28 + ((i) + 0.5f) * 76.5f)), 660     /* the i-th white-key column (lower row) */
 
 int main(int argc, char **argv)
@@ -77,6 +77,7 @@ int main(int argc, char **argv)
     tab5_set_nor(nor);
     tab5_power_on();
     panel_init(scratch, 480 * 480, blit);
+    panel_set_title(tab5_title());
     tab5_test_pitched_track();                                       /* JIANT starts with a DRUM-X track: a held voice instead */
     tick(3200);                                                      /* JIANT's splash lasts ~2.3 s */
     printf("panel drawn: %d rectangles\n", blits);
@@ -133,21 +134,21 @@ int main(int argc, char **argv)
 
     printf("knobs\n");
     h0 = screen_hash();
-    down(0, 6, 600, 300); tick(20);
-    for (int y = 300; y > 240; y -= 4) { down(0, 6, 600, y); tick(10); }
+    down(0, 6, 864, 70); tick(20);
+    for (int y = 70; y > 10; y -= 4) { down(0, 6, 864, y); tick(10); }
     lift_all(); tick(200);
     CHECK(screen_hash() != h0, "dragging KNOB 1 up 60 px changes the firmware's screen");
     snprintf(path, sizeof path, "%s/p04-after-knob.ppm", dir); save(path);
 
     printf("MASTER\n");
-    down(0, 7, 554, 430); tick(20);
-    for (int y = 430; y < 800 - 1; y += 10) { down(0, 7, 554, y); tick(5); }
+    down(0, 7, 566, 70); tick(20);
+    for (int y = 70; y < 440; y += 10) { down(0, 7, 566, y); tick(5); }
     lift_all(); tick(200);
     down(0, 8, KEYC(4)); tick(300);
     CHECK(peak_now() < 0.01f, "MASTER dragged right down: silent");
     lift_all(); tick(2000);
-    down(0, 7, 554, 430); tick(20);
-    for (int y = 430; y > 40; y -= 10) { down(0, 7, 554, y); tick(5); }
+    down(0, 7, 566, 130); tick(20);
+    for (int y = 130; y > 0; y -= 10) { down(0, 7, 566, y); tick(5); }
     lift_all(); tick(200);
     down(0, 8, KEYC(4)); tick(300);
     CHECK(peak_now() > 0.02f, "MASTER dragged back up: sound again");

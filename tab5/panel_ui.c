@@ -25,12 +25,13 @@
 
 #define SCR_X 8
 #define SCR_Y 8
-#define GRID_X 520
-#define GRID_Y 24
-#define CELL_W 116
-#define CELL_H 88
-#define GRID_DX 124
-#define GRID_DY 96
+#define GRID_X 812
+#define GRID_Y 224
+#define CELL_W 68
+#define CELL_H 106
+#define GRID_DX 76
+#define GRID_DY 121
+#define KNOB_W 112                                   /* a knob's repaint / touch box (the ring is 92) */
 #define KB_X 16
 #define KB_Y 508
 #define KB_W 1248
@@ -45,9 +46,10 @@
 #define RGB(r, g, b) ((uint16_t)((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3)))
 #define C_BLACK RGB(0, 0, 0)
 #define C_FRAME RGB(70, 76, 92)
-#define C_BTN RGB(44, 50, 66)
-#define C_BTN_BACK RGB(60, 68, 90)
-#define C_BTN_GLOW RGB(140, 98, 20)
+#define C_BTN RGB(30, 72, 82)                       /* the buttons' own colour: a dark teal (the same for every firmware) */
+#define C_BTN_BACK RGB(40, 92, 104)                    /* a "background" LED: a little lighter */
+#define C_BTN_GLOW C_BTN                               /* a dim LED shows nothing on a button: the same colour for every firmware */
+#define C_FRAME2 RGB(120, 126, 142)                   /* the rounded frames round the groups of controls */
 #define C_BTN_LED RGB(255, 178, 36)
 #define C_DOWN RGB(52, 224, 104)
 #define C_LATCH RGB(255, 232, 0)
@@ -64,7 +66,7 @@
 #define NBTN 15                                       /* 0..13 the firmware's buttons, 14 = MIDI (this panel's own) */
 #define B_MIDI 14
 static const char *const BTN_LABEL[NBTN] = {"FX", "SCL", "ENV", "LFO", "EDIT", "GLO", "HOME", "SAVE",
-                                            "ARP", "SEQ", "PLAY", "REC", "OCT-", "OCT+", "MIDI"};
+                                            "ARP", "SEQ", "PLAY", "REC", "OCT-", "OCT+", "SETUP"};
 static const uint8_t WHITE_KEY[16] = {0, 2, 4, 6, 7, 9, 11, 12, 14, 16, 18, 19, 21, 23, 24, 26};
 static const uint8_t BLACK_KEY[11] = {1, 3, 5, 8, 10, 13, 15, 17, 20, 22, 25};
 static const uint8_t BLACK_AFTER[11] = {0, 1, 2, 4, 5, 7, 8, 9, 11, 12, 14};
@@ -73,14 +75,14 @@ static const uint8_t BLACK_AFTER[11] = {0, 1, 2, 4, 5, 7, 8, 9, 11, 12, 14};
 #define NKNOB 8
 typedef struct { int16_t cx, cy, r; const char *label; } knob_t;
 static const knob_t KNOB[NKNOB] = {
-    [TAB5_E_SELECT] = {674, 430, 44, "SELECT"},
-    [TAB5_E_ALGORITHM] = {914, 430, 44, "ALGORITHM"},
-    [TAB5_E_PRESETS] = {794, 430, 44, "PRESETS"},
-    [TAB5_E_K1] = {600, 292, 52, "KNOB 1"},
-    [TAB5_E_K2] = {790, 292, 52, "KNOB 2"},
-    [TAB5_E_K3] = {980, 292, 52, "KNOB 3"},
-    [TAB5_E_K4] = {1170, 292, 52, "KNOB 4"},
-    [K_MASTER] = {554, 430, 44, "MASTER"},
+    [K_MASTER] = {566, 70, 46, "MASTER"},               /* the square of four, right of the screen */
+    [TAB5_E_SELECT] = {706, 70, 46, "SELECT"},
+    [TAB5_E_PRESETS] = {566, 232, 46, "PRESETS"},
+    [TAB5_E_ALGORITHM] = {706, 232, 46, "ALGORITHM"},
+    [TAB5_E_K1] = {864, 70, 46, "KNOB 1"},             /* the four value knobs, same size as the rest */
+    [TAB5_E_K2] = {978, 70, 46, "KNOB 2"},
+    [TAB5_E_K3] = {1092, 70, 46, "KNOB 3"},
+    [TAB5_E_K4] = {1206, 70, 46, "KNOB 4"},
 };
 
 /* ------------------------------------------------------------------------------------------- state --- */
@@ -128,12 +130,12 @@ static void btn_rect(int b, int *x, int *y)
         *x = GRID_X + (b % 6) * GRID_DX;
         *y = GRID_Y + (b / 6) * GRID_DY;
     } else {
-        *x = 984 + (b - 12) * 96;                     /* OCT-, OCT+, MIDI: 88 x 88 */
-        *y = 386;
+        *x = 534 + (b - 12) * GRID_DX;                /* OCT-, OCT+, SETUP: under the square of four, the size of the function buttons */
+        *y = GRID_Y + GRID_DY;
     }
 }
-static int btn_w(int b) { return b < 12 ? CELL_W : 88; }
-static int btn_h(int b) { return b < 12 ? CELL_H : 88; }
+static int btn_w(int b) { (void)b; return CELL_W; }
+static int btn_h(int b) { (void)b; return CELL_H; }
 static void key_rect(int k, int *x, int *y, int *black)
 {
     int i;
@@ -155,9 +157,9 @@ static void key_rect(int k, int *x, int *y, int *black)
 }
 static void knob_rect(int k, int *x, int *y, int *w, int *h)
 {
-    *x = KNOB[k].cx - 58;
+    *x = KNOB[k].cx - KNOB_W / 2;
     *y = KNOB[k].cy - KNOB[k].r - 4;
-    *w = 116;
+    *w = KNOB_W;
     *h = 2 * KNOB[k].r + 8 + 20;
 }
 static int key_at(int x, int y)                       /* the touch zones are larger than the drawn keys */
@@ -323,7 +325,7 @@ static void draw_key(int k)
     if ((back >> k) & 1u)
         col = black ? RGB(118, 128, 160) : RGB(176, 196, 236);
     if ((glow >> k) & 1u)
-        col = C_BTN_GLOW;
+        col = black ? RGB(100, 112, 150) : RGB(150, 172, 214);
     if ((lit >> k) & 1u)
         col = C_BTN_LED;
     if (down)
@@ -337,7 +339,7 @@ static void draw_key(int k)
 
 static void draw_knob(int k)
 {
-    int x, y, w, h, down = 0, i, r = KNOB[k].r, cx = 58, cy = r + 4, ang;
+    int x, y, w, h, down = 0, i, r = KNOB[k].r, cx = KNOB_W / 2, cy = r + 4, ang;
     uint32_t sig, lb = learn_bits(T_OF_KNOB(k));
     float a;
     for (i = 0; i < NC; i++)
@@ -696,6 +698,39 @@ void panel_init(uint16_t *scratch, size_t scratch_px, panel_blit_fn blit)
     tab5_master((uint32_t)s_master);
 }
 
+static char s_title[40];
+static uint8_t s_title_dirty;
+void panel_set_title(const char *t)
+{
+    int i;
+    for (i = 0; t && t[i] && i < (int)sizeof s_title - 1; i++)
+        s_title[i] = t[i];
+    s_title[i] = 0;
+    s_title_dirty = 1;
+}
+static void frame_box(int x, int y, int w, int h, int r)       /* a rounded outline, 2 px: the groups of controls */
+{
+    int i, j;
+    fill(w, h, C_BLACK);
+    for (j = 0; j < h; j++)                                     /* the pixels whose centre lies 0..2 px inside the outline: unbroken on the curves */
+        for (i = 0; i < w; i++) {
+            float px = (float)i + 0.5f, py = (float)j + 0.5f;
+            float cx = px < (float)r ? (float)r : px > (float)(w - r) ? (float)(w - r) : px;
+            float cy = py < (float)r ? (float)r : py > (float)(h - r) ? (float)(h - r) : py;
+            float d = sqrtf((px - cx) * (px - cx) + (py - cy) * (py - cy));
+            if (d <= (float)r && d > (float)r - 2.0f)
+                s_buf[j * w + i] = C_FRAME2;
+        }
+    s_blit(x, y, w, h, s_buf);
+}
+static void draw_title(void)                                    /* the firmware's name and version above the function buttons */
+{
+    fill(440, 28, C_BLACK);
+    if (s_title[0])
+        tab5_text_draw(s_buf, 440, 28, 8, 6, s_title, C_TEXT, 0);
+    s_blit(814, 172, 440, 28, s_buf);                   /* between the knobs' frame and the buttons' */
+}
+
 void panel_render(void)
 {
     int i;
@@ -706,6 +741,14 @@ void panel_render(void)
         fill(1280, 144, C_BLACK);                     /* 1280 x 144 stripes: fits the 480 x 480 scratch */
         for (i = 0; i < 720; i += 144)
             s_blit(0, i, 1280, 144, s_buf);
+        frame_box(504, 12, 265, 300, 14);                 /* MASTER, SELECT, PRESETS, ALGORITHM */
+        frame_box(806, 12, 462, 142, 14);                 /* KNOB 1..4 */
+        frame_box(806, 212, 462, 250, 14);                /* the function buttons */
+        s_title_dirty = 1;
+    }
+    if (s_title_dirty) {
+        s_title_dirty = 0;
+        draw_title();
     }
     if (s_learn)
         draw_learn_page();

@@ -33,7 +33,7 @@
 #define FELUCCA_CDC 1                            /* MENU > USB SERIAL is there (nothing behind it) */
 #define FELUCCA_UAC 0
 #define FELUCCA_UART 0
-#define FELUCCA_DUAL_CORE 0
+#define FELUCCA_DUAL_CORE 1                      /* the second core: a helper thread the app provides (tab5_mc_run_hook), else one core */
 #define FELUCCA_HOTRAM 0
 #ifndef FELUCCA_ID
 #define FELUCCA_ID "TAB5"
@@ -64,6 +64,54 @@ static uint8_t tab5_nor_dirty_map[TAB5_NOR_SIZE / 4096u / 8u];       /* one bit 
 #undef memcmp
 
 static struct { volatile uint32_t notes, buttons; } fm1_in;      /* bit per note key 0..26 / button 0..13 */
+
+/* hal/fm1_multicore.h's double: "core 1" is a helper thread of the app, handed a job with tab5_mc_run_hook and waited for with
+ * tab5_mc_wait_hook. Without them (the host tests) the firmware renders every part itself, as on one core. */
+int (*tab5_mc_run_hook)(void (*fn)(uint32_t), uint32_t arg);
+int (*tab5_mc_wait_hook)(void);                  /* 0 = done, -1 = the helper did not answer */
+static uint8_t fm1_mc_on, fm1_mc_lost;
+static uint32_t fm1_mc_max_ticks;
+typedef struct { volatile uint32_t job, done; } fm1_mc_box_t;
+static fm1_mc_box_t fm1_mc_box;
+#define FM1_MC_BAR_MAGIC 0x3152414Au
+#define FM1_MC_CLK_ARMED (1u << 16)
+#define FM1_MC_CLK_TRIP (2u << 16)
+typedef struct { uint32_t magic, barred; } fm1_mc_bar_t;
+static fm1_mc_bar_t fm1_mc_bar;
+typedef struct { uint32_t count; } fm1_core1_fault_t;
+static fm1_core1_fault_t fm1_core1_fault;
+static uint32_t fm1_ticks(void);
+static uint32_t fm1_mc_ticks(void) { return fm1_ticks(); }
+uint32_t (*tab5_cnum_hook)(void);                /* which core the caller is (0 = the audio core, 1 = the helper): the firmware keeps per-core scratch */
+static uint32_t fm1_cnum(void) { return tab5_cnum_hook ? tab5_cnum_hook() : 0u; }
+typedef struct { uint32_t pll2_con1, sys_div, sfc_baud, sfc_con, cache_b9; } fm1_clk320_t;   /* the 320 MHz switch: never done here */
+static int fm1_clk320_check(fm1_clk320_t *p) { (void)p; return 3; }
+static void fm1_clk320_switch(const fm1_clk320_t *p) { (void)p; }
+static int fm1_clk_320(void) { return 0; }
+static int fm1_mc_barred(void) { return 0; }
+static void fm1_mc_bar_set(void) {}
+static void fm1_mc_hold(void) { fm1_mc_on = 0; }
+static int fm1_mc_start(void) { fm1_mc_on = tab5_mc_run_hook != 0 && tab5_mc_wait_hook != 0; return fm1_mc_on; }
+static void fm1_mc_park(void) {}
+static int fm1_mc_run(void (*fn)(uint32_t), uint32_t arg)
+{
+    if (!fm1_mc_on || !tab5_mc_run_hook)
+        return 0;
+    fm1_mc_box.job++;
+    return tab5_mc_run_hook(fn, arg);
+}
+static int fm1_mc_done(uint32_t job) { return (int32_t)(fm1_mc_box.done - job) >= 0; }
+static int fm1_mc_wait(void)
+{
+    int r = tab5_mc_wait_hook ? tab5_mc_wait_hook() : 0;
+    if (r) {
+        fm1_mc_lost = 2u;
+        fm1_mc_hold();
+        return -1;
+    }
+    fm1_mc_box.done = fm1_mc_box.job;
+    return 0;
+}
 #include "core.h"
 #include "engines.c"
 #include "params.c"
@@ -134,8 +182,6 @@ static void fm1_adc_init(void) {}
 static void fm1_wdt_feed(void) {}
 static void fm1_irq_off(void) {}                 /* one thread: nothing to mask */
 static void fm1_irq_on(void) {}
-static int fm1_clk_320(void) { return 0; }
-static uint32_t fm1_cnum(void) { return 0; }
 
 /* ----------------------------------------------------------- the screen --- */
 static uint16_t tab5_fb[240 * 240];              /* RGB565 as the panel gets it (high byte first) */
@@ -232,6 +278,8 @@ uint32_t _pool_start[1], _pool_end[1], _rt_start[1], _rt_end[1], _rt_load[1];
 #define _hot_start _hot_end
 #define _low_start _low_end
 uint32_t _hot_end[1], _hot_load[1], _low_end[1];
+#define _c1t_start _c1t_end
+uint32_t _c1t_end[1], _c1t_load[1];
 static void fm1_timer5_ack(void) {}
 static void fm1_timer5_start(void (*isr)(void), uint32_t prio) { (void)isr; (void)prio; }
 void isr_timer5(void) {}
@@ -239,6 +287,7 @@ static void fm1_reboot(void) {}
 static void fm1_core1_stop(void) {}
 static void fm1_enter_uboot(void) {}
 static void fm1_guard_lock_top(void) {}
+static void fm1_guard_unlock_top(void) {}
 static void fm1_irq_enable_all(void) {}
 static void fm1_irq_init(void) {}
 static void fm1_time_init(void) {}
@@ -289,6 +338,8 @@ void tab5_power_on(void)
     felucca_init();
     master_boot();                               /* the pot's level from the first block */
     kb_boot_hold = 1;                            /* the keys silent under the splash */
+    if (!(cpu_cfg & CPU_1CORE))                  /* MENU > CPU 1 CORE: the helper thread stays unused */
+        fm1_mc_start();                          /* (a no-op without the app's hooks) */
     audio_init();
     boot_leds();
     autosave_boot(boot_clean);                   /* the last session's music */
@@ -341,13 +392,17 @@ static void t5_midi_drain(void)
 }
 
 #ifndef T5_FRAME_MS
-#define T5_FRAME_MS 30u                                         /* JIANT's own loop is ~15 ms; the Tab5's 360 MHz core needs half the drawing */
+#define T5_FRAME_MS 40u                                         /* JIANT's own loop is ~15 ms; the Tab5's 360 MHz core needs half the drawing */
 #endif
 
-/* ONE millisecond of the device: the clock, the audio halves due by now, the main loop */
-void tab5_step_ms(void)
+/* On the Tab5 the device can run as TWO threads, the way the FM-1 does: the audio render (the "ISR", core 1) and the main loop
+ * (ui_input, the screen: core 0). The app sets tab5_split = 1 for that; the host tests keep the single deterministic thread. */
+int tab5_split;
+static uint32_t frame_ms(void) { return tab5_split ? 20u : T5_FRAME_MS; }
+
+/* the clock and the audio halves due by now (one millisecond of the device) */
+static void tab5_step_audio_ms(void)
 {
-    t5_midi_drain();
     fm1_ms++;
     tab5_ticks += 1000u * FM1_TICKS_PER_US;
     tab5_samples_due += FS;
@@ -363,17 +418,29 @@ void tab5_step_ms(void)
         }
         tab5_half ^= 1u;
     }
-    if (tab5_booted && (int32_t)(fm1_ms - tab5_boot_ms) < 0 && !(fm1_ms % 20u))   /* the signature written */
+}
+
+/* the main loop: MIDI in, the splash, ui_input and a frame every frame_ms() */
+const char *tab5_title(void) { return "JIANT 0.9.18"; }     /* name and version, shown above the function buttons */
+int tab5_cores(void) { return fm1_mc_on ? 2 : 1; }   /* the firmware renders on this many threads */
+
+void tab5_step_ui(void)
+{
+    static uint32_t last_splash;
+    t5_midi_drain();
+    if (tab5_booted && (int32_t)(fm1_ms - tab5_boot_ms) < 0 && (fm1_ms - last_splash >= 20u)) {   /* the signature written */
+        last_splash = fm1_ms;
         splash_write(SPL_WRITE + SPL_HOLD - (tab5_boot_ms - fm1_ms));
+    }
     if (!tab5_booted || (int32_t)(fm1_ms - tab5_boot_ms) < 0)
         return;
     if (tab5_boot_ms) {                                         /* the splash goes, the loop starts */
         tab5_boot_ms = 0;
         kb_boot_hold = 0;
         lcd_fill(0, 0, 240, 240, T_BG);
-        tab5_last_frame = fm1_ms - T5_FRAME_MS;
+        tab5_last_frame = fm1_ms - frame_ms();
     }
-    if (fm1_ms - tab5_last_frame >= T5_FRAME_MS) {              /* a frame, then ui_input until the period is over */
+    if (fm1_ms - tab5_last_frame >= frame_ms()) {               /* a frame, then ui_input until the period is over */
         tab5_last_frame = fm1_ms;
         tab5_frame();
     } else {
@@ -381,12 +448,23 @@ void tab5_step_ms(void)
     }
 }
 
+/* ONE millisecond of the device, single thread (the host tests) */
+void tab5_step_ms(void)
+{
+    tab5_step_audio_ms();
+    tab5_step_ui();
+}
+
 /* n stereo frames (24 bit left-justified int32, L R L R ...): the device runs until they exist */
 void tab5_audio_read(int32_t *dst, uint32_t n)
 {
     uint32_t k;
-    while (tab5_ring_w - tab5_ring_r < n)
-        tab5_step_ms();
+    while (tab5_ring_w - tab5_ring_r < n) {
+        if (tab5_split)
+            tab5_step_audio_ms();
+        else
+            tab5_step_ms();
+    }
     for (k = 0; k < n; k++) {
         uint32_t i = (tab5_ring_r++ % TAB5_RING) * 2u;
         dst[2u * k] = tab5_ring[i];

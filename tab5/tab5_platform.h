@@ -11,6 +11,9 @@ enum { TAB5_E_SELECT, TAB5_E_ALGORITHM, TAB5_E_PRESETS, TAB5_E_K1, TAB5_E_K2, TA
 #define TAB5_NKEYS 27                                   /* key k = k semitones above F3 (F3 .. G5) */
 
 void tab5_power_on(void);                               /* boot: settings, splash, project resume */
+extern int tab5_split;                                  /* 1: the audio render and the main loop run as two threads (the app) */
+int tab5_cores(void);                                   /* 2 when the helper thread renders part of the tracks, else 1 */
+void tab5_step_ui(void);                                /* split mode: one pass of the main loop (call every ms from its own thread) */
 void tab5_step_ms(void);                                /* the device advances 1 ms (clock, audio, main loop) */
 void tab5_audio_read(int32_t *dst, uint32_t n);         /* n stereo frames, 24 bit left-justified int32 */
 
@@ -50,3 +53,13 @@ extern uint32_t (*tab5_ticks_hook)(void);               /* set a real timer here
 /* the firmware's pixel font (capitals) for labels: width of a string, and draw it into a native RGB565 buffer */
 int tab5_text_width(const char *s, int big);            /* big: 0 = 16 px high, 1 = 32 px */
 int tab5_text_draw(uint16_t *dst, int dw, int dh, int x, int y, const char *s, uint16_t color, int big);
+
+/* The second core (JIANT's mixer renders some tracks on it). The app provides a helper thread: tab5_mc_run_hook hands it
+ * fn(arg) and returns 1 at once, tab5_mc_wait_hook blocks until it finished (0) or gives up (-1). tab5_cnum_hook tells the
+ * firmware which thread it is on (0 = the audio render, 1 = the helper: the firmware keeps per-core scratch). Set all three
+ * before tab5_power_on(); left NULL, the firmware renders everything on the one thread. */
+extern int (*tab5_mc_run_hook)(void (*fn)(uint32_t), uint32_t arg);
+extern int (*tab5_mc_wait_hook)(void);
+extern uint32_t (*tab5_cnum_hook)(void);
+
+const char *tab5_title(void);                          /* the firmware's name and version for the panel */
